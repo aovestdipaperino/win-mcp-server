@@ -25,6 +25,39 @@ def get_username_suggestion() -> str:
     return getpass.getuser()
 
 
+def keychain_list_accounts(service: str) -> list:
+    """List all Keychain account names for a service.
+
+    ``security find-generic-password -s <service>`` only ever returns a single
+    (default) item, so it cannot be used to enumerate multiple stored accounts.
+    ``dump-keychain`` lists every item, letting us find credentials for any
+    host/domain regardless of how many entries exist.
+    """
+    accounts = []
+    try:
+        result = subprocess.run(
+            ["security", "dump-keychain"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return accounts
+
+    pending_account = None
+    for line in result.stdout.split("\n"):
+        stripped = line.strip()
+        if stripped.startswith('"acct"<blob>='):
+            # Extract the quoted account value
+            parts = line.split('"')
+            pending_account = parts[3] if len(parts) >= 4 else None
+        elif stripped.startswith('"svce"<blob>=') and pending_account is not None:
+            if f'"{service}"' in stripped:
+                accounts.append(pending_account.replace("\\134", "\\"))
+            pending_account = None
+    return accounts
+
+
 def keychain_get_password(service: str, account: str) -> Optional[str]:
     """Get password from macOS Keychain."""
     try:
@@ -150,38 +183,28 @@ def get_credentials(hostname: str) -> Tuple[str, str]:
     domain = get_domain_from_hostname(hostname)
     service = "win-mcp"
 
-    # Check for cached credentials - look for both formats
-    try:
-        # Get all accounts for this service
-        account_result = subprocess.run([
-            'security', 'find-generic-password',
-            '-s', service
-        ], capture_output=True, text=True, check=False)
+    # Check for cached credentials across all stored accounts for this
+    # service. We enumerate every account (find-generic-password only returns
+    # one) and match those belonging to this domain, in both the
+    # username@domain and domain\username formats.
+    for account in keychain_list_accounts(service):
+        # Determine the username for this account if it matches the domain
+        username = None
+        if '@' in account and account.endswith(f'@{domain}'):
+            username = account.split('@')[0]
+        elif '\\' in account and account.startswith(f'{domain}\\'):
+            username = account.split('\\')[1]
 
-        if account_result.returncode == 0:
-            for line in account_result.stdout.split('\n'):
-                if 'acct' in line and domain in line:
-                    # Extract account name
-                    parts = line.split('"')
-                    if len(parts) >= 4:
-                        account = parts[3]
-                        # Clean up encoding
-                        account = account.replace('\\134', '\\')
+        if not username:
+            continue
 
-                        # Handle both formats: username@domain or domain\username
-                        username = None
-                        if '@' in account and domain in account:
-                            username = account.split('@')[0]
-                        elif '\\' in account and domain in account:
-                            username = account.split('\\')[1]
+        # Honour the TTL: skip expired entries so they get re-prompted
+        if keychain_check_expired(service, account):
+            continue
 
-                        if username:
-                            # Get password for this specific account
-                            password = keychain_get_password(service, account)
-                            if password:
-                                return username, password
-    except subprocess.CalledProcessError:
-        pass
+        password = keychain_get_password(service, account)
+        if password:
+            return username, password
 
     # No cached credentials found, prompt using GUI
     username, password = prompt_credentials_gui(domain, get_username_suggestion())
