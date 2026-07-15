@@ -2,6 +2,7 @@
 """Secure credential management for WinRM connections."""
 
 import getpass
+import os
 import subprocess
 import sys
 import time
@@ -182,6 +183,13 @@ def get_credentials(hostname: str) -> Tuple[str, str]:
     """Get credentials for hostname with GUI prompting and caching."""
     domain = get_domain_from_hostname(hostname)
     service = "win-mcp"
+
+    # Environment variables take precedence over cached/prompted credentials.
+    # This allows non-interactive/CI usage without any GUI prompt.
+    env_user = os.environ.get("WINRM-USER") or os.environ.get("WINRM_USER")
+    env_pwd = os.environ.get("WINRM-PWD") or os.environ.get("WINRM_PWD")
+    if env_user and env_pwd:
+        return env_user, env_pwd
 
     # Check for cached credentials across all stored accounts for this
     # service. We enumerate every account (find-generic-password only returns

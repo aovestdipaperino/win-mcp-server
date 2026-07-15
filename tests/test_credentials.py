@@ -67,6 +67,34 @@ def test_get_credentials_picks_correct_account_with_multiple_entries():
     assert (username, password) == ("enzo", "vm-pass")
 
 
+def test_get_credentials_reads_env_variables():
+    """Env vars WINRM-USER/WINRM-PWD short-circuit keychain and GUI prompt."""
+    with patch.dict("os.environ",
+                    {"WINRM-USER": "envuser", "WINRM-PWD": "envpass"},
+                    clear=False), \
+         patch.object(credentials, "keychain_list_accounts") as list_accounts, \
+         patch.object(credentials, "prompt_credentials_gui") as prompt:
+        username, password = credentials.get_credentials("10.211.55.7")
+
+    assert (username, password) == ("envuser", "envpass")
+    list_accounts.assert_not_called()
+    prompt.assert_not_called()
+
+
+def test_get_credentials_reads_underscore_env_variables():
+    """Underscore variants WINRM_USER/WINRM_PWD are also honoured."""
+    with patch.dict("os.environ",
+                    {"WINRM_USER": "envuser", "WINRM_PWD": "envpass"},
+                    clear=False), \
+         patch.object(credentials, "keychain_list_accounts") as list_accounts, \
+         patch.object(credentials, "prompt_credentials_gui") as prompt:
+        username, password = credentials.get_credentials("10.211.55.7")
+
+    assert (username, password) == ("envuser", "envpass")
+    list_accounts.assert_not_called()
+    prompt.assert_not_called()
+
+
 def test_get_credentials_skips_expired_entries():
     """Expired cached entries are ignored so they get re-prompted (TTL on read)."""
     with patch.object(credentials, "keychain_list_accounts",
